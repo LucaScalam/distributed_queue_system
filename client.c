@@ -95,7 +95,6 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-//num_args name dir arg1 arg2 ...
 void getArgsSubmit(Msg *pkg, int sockfd){
     char buff[SZ_PATH];
     bzero(buff,SZ_PATH);
@@ -116,12 +115,11 @@ void getArgsSubmit(Msg *pkg, int sockfd){
     free(line);
 
     if (sendMsg(sockfd,pkg) != 1){
-        perror("ERROR on sending msg");
+        perror("ERROR on sending msg to main server");
     }
 
 }        
 
-//num_args name dir arg1 arg2 ...
 int getArgsSubmitInt(Msg *pkg, int sockfd){
     char buff[SZ_PATH];
     char *line = NULL;
@@ -181,7 +179,9 @@ void client_accept(int sock){
         return;
     }
 
-    interaction_2(newsockfd);
+    printf("Connected to exec_server... \n");
+
+    interaction_1(newsockfd);
 
     close(newsockfd);
 
@@ -192,8 +192,7 @@ void client_protocol(int socket){
     int err;
 
     if( (err = recvMsg(socket, &pkg)) == 1 ) {
-
-        switch( pkg.hdr.type ) {
+        switch( getType(&pkg.hdr) ) {
             case TYPE_SUB_RESP:
                 jobSubmittedResponse(&pkg);
                 break;
@@ -210,7 +209,7 @@ void client_protocol(int socket){
                 badParamsResponse();
                 break;
             default:
-                perror("Bad type msg attending client");
+                perror("Bad type msg sending to main server");
         }
     }else{
         if (err == 0 ){
@@ -223,27 +222,67 @@ void client_protocol(int socket){
 }
 
 void jobSubmittedResponse(Msg *pkg){
-    JobID job_id = getJobID(pkg);
+    JobID job_id;
+    job_id.job_id = getJobID(pkg);
     printf("Job submitted -> JobID: %d \n", job_id.job_id);
 }
 
 void jobStateResponse(Msg *pkg){
-    Job_State job_state = getJobState(pkg);
-    printf("JobID %d - State: %d - Exit_status: %d \n", job_state.jobid.job_id,job_state.state, job_state.exit_value);
+    uint16_t job_id = getJobState_ID(pkg);
+    uint8_t state = getJobState_State(pkg);
+    uint8_t exit_value = getJobState_ExitValue(pkg);
+    printf("JobID %d - ", job_id);
+    switch (state)
+    {
+    case STATE_WAIT:
+        printf("STATE_WAIT \n");
+        break;
+    case STATE_RUN:
+        printf("STATE_RUN \n");
+        break;
+    case STATE_FINISHED:
+        printf("STATE_FINISHED - ExitStat : %d\n", exit_value);
+        break;
+    case STATE_UNSUBMITED:
+        printf("STATE_UNSUBMITED \n");
+        break;
+    case STATE_SIGNALED:
+        printf("STATE_SIGNALED - ExitStat : %d\n", exit_value);
+        break;
+    case STATE_ERROR:
+        printf("STATE_ERROR - ExitStat : %d\n", exit_value);
+        break;
+    default:
+        break;
+    }
+    
 }
 
 void badParamsResponse(){
     printf("Bad parameters sent \n");
 }
 
-void queueStateResponse(Msg *pkg){
-    Queue_State queue_state = getQueueState(pkg);
-    printf("QueueID %d - State: %d\n", queue_state.queueid.queue_id,queue_state.state);
+void queueStateResponse(const Msg *pkg){
+    uint8_t queue_state = getQueueState_State(pkg);
+    uint8_t queue_id = getQueueState_ID(pkg);
+    printf("QueueID %d - ", queue_id);
+    switch ( queue_state )
+    {
+    case STATE_AVAIL:
+        printf("STATE_AVAIL \n");
+        break;
+    case STATE_FULL:
+        printf("STATE_FULL \n");
+        break;
+    default:
+        break;
+    }
 }
 
-void unsubmitResponse(Msg *pkg){
-    printf("JobID %d unsubmited\n", pkg->payload.jobid.job_id);
+void unsubmitResponse(const Msg *pkg){
+    printf("JobID %d unsubmited\n", getJobID(pkg));
 }
+
 void JobState(Msg *pkg, char *to_jobid, int sockfd){
     JobID jobid;
     jobid.job_id = atoi(to_jobid);
@@ -299,37 +338,7 @@ void unsubmit(Msg *pkg, char *to_jobid, int sockfd){
 
 }
 
-/*
-// void interaction_1(int sockfd){
-//     int n;
-//     char buffer[256];
-//     bzero(buffer,256);
-
-//     n = write(sockfd,buffer,255);
-//     if (n < 0) 
-//          error("ERROR reading from socket");
-
-//     n = read(sockfd,buffer,255);
-//     if (n < 0) 
-//          error("ERROR reading from socket");
-//     printf("%s\n",buffer);
-
-//     bzero(buffer,256);
-//     fgets(buffer,255,stdin);
-
-//     n = write(sockfd,buffer,255);
-//     if (n < 0) 
-//          error("ERROR reading from socket");
-
-//     n = read(sockfd,buffer,255);
-//     if (n < 0) 
-//         error("ERROR reading from socket");
-//     printf("%s \n",buffer);
-
-// }
-*/
-
-void interaction_2(int sockfd){
+void interaction_1(int sockfd){
     fd_set rfds;
     char buff[256];
     int n;

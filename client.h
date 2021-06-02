@@ -21,10 +21,10 @@ void jobSubmittedResponse(Msg *pkg);
 void jobStateResponse(Msg *pkg);
 
 //Gets response from queue state
-void queueStateResponse(Msg *pkg);
+void queueStateResponse(const Msg *pkg);
 
 //Gets response from unsubmited job
-void unsubmitResponse(Msg *pkg);
+void unsubmitResponse(const Msg *pkg);
 
 //Parameters from msg sent were wrong
 void badParamsResponse();
@@ -48,6 +48,3 @@ void unsubmit(Msg *pkg, char *to_jobid, int sockfd);
 
 //function 1 to test iter jobs
 void interaction_1(int sockfd);
-
-//function 2 to test iter jobs
-void interaction_2(int sockfd);
