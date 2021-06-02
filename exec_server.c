@@ -10,6 +10,7 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <assert.h>
+#include <sys/wait.h>
 
 #include "exec_server.h"
 #include "main_server.h"
@@ -19,9 +20,10 @@ int main(int argc, char *argv[]){
     int sockfd, portno;
     struct sockaddr_in serv_addr;
     struct hostent *server;
-    Msg pkg;
     char *command;
     char buffer[256];
+    int flag = 1;
+    
     if (argc < 3) {
        fprintf(stderr,"usage %s hostname port \n", argv[0]);
        exit(0);
@@ -47,130 +49,212 @@ int main(int argc, char *argv[]){
     }
 
     command = buffer;
-    int flag_stop = 0;
 
-    while( !flag_stop ){
+    while( flag ){
         printf("Insert command: \n");
         bzero(buffer,256);
         scanf("%s",buffer);
         getchar();
 
         if ( strcmp(command, "job") == 0 ){
-
-            setJobReq(&pkg);
-            if (sendMsg(sockfd,&pkg) != 1){
-                perror("ERROR on sending setJobReq");
-            }
-            exec_server_protocol(sockfd);
+            
+            flag = jobRequest(sockfd);
 
         } else if ( strcmp(command, "stop") == 0 ){
 
-            setClosedConnection_ExecServer(&pkg);
-            if (sendMsg(sockfd,&pkg) != 1){
-                perror("ERROR on sending msg");
-            }
-            flag_stop = 1;
-
+            flag = closeConnecMain(sockfd);
 
         }else{
             printf("Bad command, try again \n");
         }
 
-    }
-
+    } 
 
     close(sockfd);
     return 0;
 
 }
 
-void exec_server_protocol(int socket){
+int jobRequest(int sockfd){
     Msg pkg;
     int err;
-
-    if( (err = recvMsg(socket, &pkg)) == 1 ) {
-        switch( pkg.hdr.type ) {
-            case TYPE_SENDJOB_NOINTER:
-            case TYPE_SENDJOB_INTER:
-                execJob(&pkg, socket);
-                break;
-            default:
-                perror("Bad type msg attending exec_server");
-                break;
-        }
-        
-    }else{
-        if (err == 0 ){
-            printf("Socket closed. \n");
-        }else{
-            perror("ERROR on recvMsg - exec_server");
-        }
+    setJobReq(&pkg);
+    err = sendMsg(sockfd,&pkg);
+    if ( err == -1 ){
+        perror("ERROR on sending setJobReq");
+        return 0;
+    } else if ( err == 0 ){
+        perror("Socket closed");
+        return 0;
+    } else {
+        return exec_server_protocol(sockfd);
     }
 
 }
 
-void execJob(Msg *pkg, int socket_main){
+int closeConnecMain(int sockfd){
+    Msg pkg;
+    setClosedConnection_ExecServer(&pkg);
+    if (sendMsg(sockfd,&pkg) != 1){
+        perror("ERROR on sending msg");
+    }
+    return 0;
+}
+    
+int exec_server_protocol(int socket){
+    Msg pkg;
+    int err,out;
+
+    if( (err = recvMsg(socket, &pkg)) == 1 ) {
+        switch( getType(&pkg.hdr) ) {
+            case TYPE_SENDJOB_NOINTER:
+            case TYPE_SENDJOB_INTER:
+                out = execJob(&pkg, socket);
+                break;
+            case TYPE_CH_EXEC_SER:
+                out = ackRoutine(socket);
+                break;
+            default:
+                perror("Bad type msg attending exec_server");
+                out = 0;
+                break;
+        }
+        
+    } else {
+        if (err == 0 ){
+            printf("Socket closed. \n");
+            out = 0;
+        } else {
+            perror("ERROR on recvMsg - exec_server");
+            out = 0;
+        }
+    }
+
+    return out;
+}
+
+int ackRoutine(int socket){
+    int ack_result;
+    ack_result = sendAck(socket);
+
+    if ( ack_result == 0 ){
+        return 0;
+    } else {
+        return exec_server_protocol(socket);
+    }
+}
+
+int sendAck(int socket){
+    Msg pkg;
+    int err;
+    setCheckExecServerAck(&pkg);
+    printf("to sleep \n");
+    sleep(6);
+    printf("up \n");
+    err = sendMsg(socket,&pkg);
+    if ( err == -1 ){
+        perror("ERROR sending ACK");
+        return 0;
+    } else if ( err == 0 ){
+        perror("socket closed sending ACK");
+        return 0;
+    }
+
+    return 1;
+
+}
+
+int execJob(const Msg *pkg, int socket_main){
     pid_t pid;
 
     pid = fork();
     switch( pid ) {
         case 0:
             exec_server_protocol_child(pkg);
-            exit(0);
+            exit(40);
         case -1:
             perror("error fork()");
-            return;
+            error_fork(pkg,socket_main);
+            return 1;
+            break;
         default:
             exec_server_protocol_father(pkg, socket_main);
+            return 1;
             break;  
     }
 
+    return 1;
 }
 
-void exec_server_protocol_child(Msg *pkg){
+void exec_server_protocol_child(const Msg *pkg){
 
             consumeJob(pkg);
 
 }
 
-void exec_server_protocol_father(Msg *pkg, int socket_main){
-    switch( pkg->hdr.type ) {
+void exec_server_protocol_father(const Msg *pkg, int socket_main){
+    switch( getType(&pkg->hdr) ) {
         case TYPE_SENDJOB_NOINTER:
-            fatherJobRoutine(pkg->payload.job_exec.jobid, socket_main);
+            fatherJobRoutine(getJobID_NoIter(pkg), socket_main);
             break;
         case TYPE_SENDJOB_INTER:
-            fatherJobRoutine(pkg->payload.job_exec_addr.jobid, socket_main);
+
+            fatherJobRoutine(getJobID_Iter(pkg), socket_main);
             break;
         default:
             break;
     }
+
 }
 
-void consumeJob(Msg *pkg){
+void error_fork(const Msg *pkg, int socket_main){
+    Msg new_pkg;
+    int err = 0;
+
+    switch( getType(&pkg->hdr) ) {
+        case TYPE_SENDJOB_NOINTER:
+            setJobDone(&new_pkg, getJobID_NoIter(pkg), 41);
+            break;
+        case TYPE_SENDJOB_INTER:
+            setJobDone(&new_pkg, getJobID_Iter(pkg), 41);
+            break;
+        default:
+            break;
+    }
+    
+
+    err = 0;
+    if ( (err = sendMsg(socket_main,&new_pkg)) == -1 ){
+        perror("ERROR sending DoneMsg");
+    }
+}
+
+void consumeJob(const Msg *pkg){
     int ret, i, sock_client;
-    char *line;
-    char *args[MAX_ARGS] = { NULL };
+    const char *line;
+    char *args[ARG_MAX] = { NULL };
     char *auxline;
     char *saveptr;
+    char line_cpy[SZ_PATH * NUM_PATH];
     
-    if ( pkg->hdr.type == TYPE_SENDJOB_NOINTER ){
+    if ( getType(&pkg->hdr) == TYPE_SENDJOB_NOINTER ){
         setFDsNoIter(pkg);
-        line = pkg->payload.job_exec.file_exec.exec_file;
-    } else if ( pkg->hdr.type == TYPE_SENDJOB_INTER ){
+        line = getExec_fileExec_execfile(pkg);
+    } else if ( getType(&pkg->hdr) == TYPE_SENDJOB_INTER ){
         sock_client = setFDsIter(pkg);
-        line = pkg->payload.job_exec_addr.file_exec.exec_file;
+        line = getExecAddr_fileExec_execfile(pkg);
     } else {
         assert(0);
     }
-
-    auxline = line;
+    strncpy(line_cpy,line,SZ_PATH * NUM_PATH);
+    auxline = line_cpy;
     i = 0;
     while( (args[i] = strtok_r(auxline, " \n", &saveptr)) ) {
         if( auxline )
             auxline = NULL;
         ++i;
-        if( i == MAX_ARGS ) {
-            args[MAX_ARGS - 1] = NULL;
+        if( i == ARG_MAX ) {
+            args[ARG_MAX - 1] = NULL;
             break;
         }
     }
@@ -181,10 +265,7 @@ void consumeJob(Msg *pkg){
         return;
     }
 
-    // close(out);
-    // close(err);
-    // close(devNull);
-    // close(sock_client);
+    close(sock_client);
     
     while( i != 0 ){
         free(args[i-1]);
@@ -192,17 +273,17 @@ void consumeJob(Msg *pkg){
     }
 }
 
-void setFDsNoIter(Msg *pkg){
+void setFDsNoIter(const Msg *pkg){
     char fname[128];
 
-    sprintf(fname, "cout-%d.log", pkg->payload.job_exec.jobid.job_id);
+    sprintf(fname, "cout-%d.log", getJobID_NoIter(pkg));
     int out = open(fname, O_WRONLY|O_CREAT|O_APPEND, 0600);
     if (-1 == out) { 
         perror("opening cout.log"); 
         return; 
     }
 
-    sprintf(fname, "cerr-%d.log", pkg->payload.job_exec.jobid.job_id);
+    sprintf(fname, "cerr-%d.log", getJobID_NoIter(pkg));
     int err = open(fname , O_WRONLY|O_CREAT|O_APPEND, 0600);
     if (-1 == err) { 
         perror("opening cerr.log"); 
@@ -229,16 +310,16 @@ void setFDsNoIter(Msg *pkg){
         return; 
     }
 
-    if ( chdir(pkg->payload.job_exec.file_exec.working_dir) == -1 ){ 
+    if ( chdir(getExec_fileExec_wdir(pkg)) == -1 ){ 
         perror("cannot change dir"); 
         return; 
     }
 }
 
-int setFDsIter(Msg *pkg){
+int setFDsIter(const Msg *pkg){
     int sock_client;
 
-    sock_client = socketPortConnect(pkg->payload.job_exec_addr.port, pkg->payload.job_exec_addr.ipaddr);
+    sock_client = socketPortConnect(getExecAddr_port(pkg), getExecAddr_ipadd(pkg));
 
     printf("Connected to client... \n");
 
@@ -256,7 +337,7 @@ int setFDsIter(Msg *pkg){
         return -1; 
     }
 
-    if ( chdir(pkg->payload.job_exec_addr.file_exec.working_dir) == -1 ){ 
+    if ( chdir(getExecAddr_fileExec_wdir(pkg)) == -1 ){ 
         perror("cannot change dir"); 
         return -1; 
     }
@@ -296,7 +377,7 @@ int socketPortConnect(uint16_t port, uint32_t address){
     return sockfd;
 }
 
-void fatherJobRoutine(JobID job_id,int socket_main){
+void fatherJobRoutine(uint16_t job_id,int socket_main){
     Msg pkg_to_send_1, pkg_to_send_2;
     pid_t pid;
     int wstatus;
@@ -314,6 +395,7 @@ void fatherJobRoutine(JobID job_id,int socket_main){
     }
 
     if ( WIFEXITED(wstatus) ){
+
         setJobDone(&pkg_to_send_2, job_id, WEXITSTATUS(wstatus));
     }else if ( WIFSIGNALED(wstatus) ){
         setJobSignaled(&pkg_to_send_2, job_id, WTERMSIG(wstatus));
@@ -327,3 +409,6 @@ void fatherJobRoutine(JobID job_id,int socket_main){
     }
 
 }
+
+
+
