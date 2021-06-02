@@ -1,18 +1,10 @@
 #include "PROTO_DIST_QUEUE.h"
 
 
-#define MAX_JOBS_QUEUE 1024
-#define JOB_HISTORY_MAX 256
-#define MAX_SOCKET  100
-#define NUM_QUEUE_MAX 2
-#define QUEUE_SZ 20
+#define MAX_JOBS_QUEUE 15     //Number max of jobs for each queue
+#define JOB_HISTORY_MAX 10       //Number of jobs in the history array
+#define NUM_QUEUE_MAX 1         //Number of queues
 
-typedef struct {
-    int fds_container_server[MAX_SOCKET];
-    int fds_container_client[MAX_SOCKET];    
-    int count_socket_server;
-    int count_socket_client;
-}SocketStock_t;
 
 typedef struct {
     uint16_t id;
@@ -20,6 +12,9 @@ typedef struct {
     uint8_t state;
     uint8_t exit_status;
     uint8_t queue_idx;
+    time_t submitTime;
+    time_t startProcTime;
+    time_t endProcTime;
 } JobHistory_t;
 
 
@@ -27,11 +22,8 @@ typedef struct {
     uint16_t id;
     uint16_t port;
     uint32_t ipaddr;
-    char exec_file[SZ_PATH*4];
+    char exec_file[SZ_PATH*NUM_PATH];
     char working_dir[SZ_PATH];
-    // uint8_t state;
-    // uint8_t exit_status;
-    // uint8_t queue_idx;
 } Job_t;
 
 typedef struct {
@@ -39,7 +31,6 @@ typedef struct {
     pthread_cond_t get_condv;
     pthread_cond_t put_condv;
     Job_t *jobs[MAX_JOBS_QUEUE];
-    unsigned q_size;
     unsigned put_idx;
     unsigned get_idx;
     uint16_t id;
@@ -47,7 +38,6 @@ typedef struct {
 } Queue_t;
 
 typedef struct {
-    // uint16_t jobID_counter;
     JobHistory_t *job_array[JOB_HISTORY_MAX];
     uint32_t history_putidx;
     pthread_mutex_t job_hist_mtx;
@@ -61,14 +51,6 @@ typedef struct {
     MainServer_t *main_server;
     int sockfd;
 } ThreadArg_t;
-
-int searchMax(SocketStock_t *stock);
-
-void cleanStock(int *fds_container[], int *count_socket);
-
-void upStock(SocketStock_t *stock, int new_sockfd, int type);
-
-void showStock(SocketStock_t stock);
 
 //Creates socket in main_server
 int socketCreate(char* argv);
@@ -98,31 +80,36 @@ void *threadNewExecServ(void *m_server);
 void *attendExecServ(void *server_args);
 
 //Submits No interactive job
-void submitNoInter(Job_Exec *job_exec, MainServer_t *main_server, int sock);
+void submitNoInter(const Msg *pkg, MainServer_t *main_server, int sock);
 
 //Submits interactive job
-void submitInter(Job_Exec_Addr *job_exec_ad, MainServer_t *main_server, int sock);
+void submitInter(const Msg *pkg, MainServer_t *main_server, int sock);
 
-//Function used by submitIter and submitNoIter to put job into queue
-void putJob(Job_t *new_job, MainServer_t *main_server, int sock);
+//Function used by submitIter and submitNoIter to create job_history
+//and calls putJob
+void newJob(Job_t *new_job, MainServer_t *main_server, int sock);
+
+//Function to put a jub into queue
+void putJob(Queue_t *queue, Job_t *new_job);
 
 //Sends pkg with job state
-void jobState(JobID *jobid, MainServer_t *main_server, int sockfd);
+void jobState(uint16_t jobid, MainServer_t *main_server, int sockfd);
 
 //sends pkg with queue state
-void queueState(const QueueID *queueid, MainServer_t *main_server, int sockfd);
+void queueState(QueueID queueid, MainServer_t *main_server, int sockfd);
 
 //Removes job from queue and sends pkg with queue state
-void unsubmit(JobID *jobid, MainServer_t *main_server, int sockfd);
+void unsubmit(uint16_t jobid, MainServer_t *main_server, int sockfd);
 
 //Removes job from queue
-void removeJob(const JobID *jobid, Queue_t *queue);
+void removeJob(uint16_t jobid, Queue_t *queue);
 
-//Sends job to exec_server
-void sendJob(ThreadArg_t *server_thread_arg);
+//Sends job to exec_server. Returns 1 if OK.
+//Returns 0 in other case.
+int sendJob(ThreadArg_t *server_thread_arg);
 
 //Changes state of Job
-void changeStateJob(Job_State* jstate, MainServer_t *main_server);
+void changeStateJob( const Msg *pkg, MainServer_t *main_server);
 
 //Shows jobs info in main_server
 void printHistoryJobs(MainServer_t* main_server);
@@ -133,19 +120,19 @@ void printQueueJobs(Queue_t* queue);
 //Sends submitted response to client
 void submittedResponse(uint16_t jobid, int sock);
 
-// //Updates state of job to STATE_DONE
-// void updateStateJobDone(Job_State jstate, MainServer_t *main_server);
-
-// //Updates state of job to STATE_RUN
-// void updateStateJobRun(JobID jobid, MainServer_t *main_server);
-
-// //Updates state of job to STATE_SIGNALED
-// void updateStateJobSignal(JobID jobid, MainServer_t *main_server);
-
-// void updateStateJob(Job_State jstate, MainServer_t *main_server);
-
 // returns idx of job_id from main_server->job_array
 // if no job is found, returns -1
 // Important: main_server->job_hist_mtx needs to be locked
 // before the calling and it will need to be unlocked after the calling
-int findJob(JobID *jobid, MainServer_t *main_server);
+int findJob(uint16_t jobid, MainServer_t *main_server);
+
+//Sends check msg to exec_server and waits for ack
+//If everything was OK, returns 1.
+//Another case, returns 0;
+int checkServerStatus(int sockfd);
+
+//Puts job back into queue, calling putJob()
+void putJobBack(MainServer_t* main_server,Job_t *job);
+
+//Setter for params of a new JobHistory_t
+void setParamsNewJobHistory(JobHistory_t *job_history, uint16_t queue_idx, uint32_t ipaddr);
